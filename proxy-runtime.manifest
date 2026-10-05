@@ -1,0 +1,70 @@
+# Proxy runtime manifest — explicit allowlist, no wildcards.
+# Every .py file the release zip may contain. Source of truth: Python tree
+# rooted at proxy.py + proxy_internal/ in THIS repo (target checkout).
+# sync-release-staging.ps1 and build-release.ps1 assert the staged tree
+# matches this list exactly (fail closed on missing OR unexpected .py).
+# Regenerate when the runtime gains/renames a module:
+#   find proxy_internal proxy.py -name '*.py' | sort
+# UNRELEASED: this tree is new in this checkout and has not shipped yet.
+
+proxy.py
+proxy_internal/__init__.py
+proxy_internal/_json.py
+proxy_internal/anthropic_adapter.py
+proxy_internal/auth/__init__.py
+proxy_internal/auth/antigravity.py
+proxy_internal/auth/base.py
+proxy_internal/auth/codex.py
+proxy_internal/auth/qwen.py
+proxy_internal/cli_client_identity.py
+proxy_internal/concurrency.py
+proxy_internal/config_store.py
+proxy_internal/context_trim.py
+proxy_internal/credential_discovery.py
+proxy_internal/dashboard.py
+proxy_internal/encryption.py
+proxy_internal/endpoints/__init__.py
+proxy_internal/endpoints/_security.py
+proxy_internal/endpoints/anthropic_messages.py
+proxy_internal/endpoints/antigravity_oauth.py
+proxy_internal/endpoints/chat_completions.py
+proxy_internal/endpoints/config_keys.py
+proxy_internal/endpoints/config_providers.py
+proxy_internal/endpoints/config_runtime.py
+proxy_internal/endpoints/dashboard.py
+proxy_internal/endpoints/health.py
+proxy_internal/endpoints/models.py
+proxy_internal/endpoints/stats_endpoint.py
+proxy_internal/interceptor_utils.py
+proxy_internal/interceptors.py
+proxy_internal/message_normalize.py
+proxy_internal/model_detect.py
+proxy_internal/model_grouping.py
+proxy_internal/output_sanitize.py
+proxy_internal/port_utils.py
+proxy_internal/provider_config.py
+proxy_internal/providers/__init__.py
+proxy_internal/providers/antigravity.py
+proxy_internal/providers/antigravity_structured.py
+proxy_internal/providers/bytedance.py
+proxy_internal/providers/claude.py
+proxy_internal/providers/codex.py
+proxy_internal/providers/command_code.py
+proxy_internal/providers/fireworks.py
+proxy_internal/providers/kilo.py
+proxy_internal/providers/lmstudio.py
+proxy_internal/providers/nvidia.py
+proxy_internal/providers/ollama.py
+proxy_internal/providers/opencode.py
+proxy_internal/providers/openrouter.py
+proxy_internal/providers/qwen.py
+proxy_internal/providers/vertex.py
+proxy_internal/providers/xiaomi.py
+proxy_internal/providers/zai.py
+proxy_internal/registry.py
+proxy_internal/retry.py
+proxy_internal/schemas.py
+proxy_internal/sse_parser.py
+proxy_internal/sse_utils.py
+proxy_internal/streaming.py
+proxy_internal/tailscale.py

@@ -1,13 +1,11 @@
 # Packages the downloadable release zip (SkyrimNetMultiProxy-vX.Y.Z.zip). Unlike
-# vortex-collection-tools' own build-release.ps1, this repo is NOT the source of truth for every
-# release file -- proxy.py, requirements.txt, config.example.json, proxy.ini.example, and
-# start-proxy.bat all come from the private skyrimnet-multiproxy-dev repo at release-build time
-# (see the v2.0.0 commit message), so this script can't regenerate them itself. It expects them
-# already staged in release-staging\ (gitignored) -- copy the current versions there by hand before
-# running this (or reuse the ones already in a prior release zip if nothing proxy-side changed).
-# release-staging\ also holds LICENSE-proxy.txt, a copy of the dev repo's own LICENSE file -- the
-# bundled proxy.py carries MIT-licensed code from galanx (Claude-SkyrimNet-Proxy) and rhinos0608
-# (skyrimnet-codex-proxy), and MIT requires their copyright notices to travel with the release.
+# vortex-collection-tools' own build-release.ps1, this repo still isn't the only source in the
+# zip -- the SKSE plugin DLL is built from src/ here, but the Python proxy runtime (proxy.py +
+# proxy_internal\) is staged from this repo's own tracked tree via sync-release-staging.ps1
+# (see that script's header + RELEASING.md). This script can't regenerate the runtime itself;
+# it expects release-staging\ (gitignored) already populated. Either run
+# .\sync-release-staging.ps1 first, or reuse a prior release zip's runtime files if nothing
+# proxy-side changed -- but the script refuses to build from a staging dir it can't verify.
 #
 # What this script DOES own: assembling the SKSE plugin itself (SkyrimNetMultiProxy.dll +
 # SkyrimNetMultiProxy.ini) into its own importable archive, SkyrimNetMultiProxy.zip, so a mod
@@ -27,13 +25,17 @@
 #
 # Requires: SkyrimNetMultiProxy.dll already built (build\Release\SkyrimNetMultiProxy.dll -- via
 # CMake/Visual Studio), and release-staging\ populated. Reads the version from skse-project.json.
+# NOTE: do NOT run this speculatively -- it is documented here, not executed, as part of normal
+# code changes. Only run it when actually cutting a release.
 
 $ErrorActionPreference = "Stop"
 $root = $PSScriptRoot
 $version = (Get-Content (Join-Path $root "skse-project.json") -Raw | ConvertFrom-Json).Version
 $releaseName = "SkyrimNetMultiProxy-v$version"
 $wrapperName = "SkyrimNet MultiProxy"
-$work = Join-Path $env:TEMP "proxy-launcher-release-build"
+# Unique per-invocation work dir (GUID-suffixed) -- never a shared or version-fixed temp
+# folder, so concurrent or repeated builds can't delete each other's tree.
+$work = Join-Path ([System.IO.Path]::GetTempPath()) ("proxy-launcher-release-build-" + [guid]::NewGuid().ToString("N"))
 $stageDir = Join-Path $work $releaseName
 $contentDir = Join-Path $stageDir $wrapperName
 
@@ -43,18 +45,37 @@ if (-not (Test-Path $dllPath)) {
 }
 
 $stagingSrc = Join-Path $root "release-staging"
-$externalFiles = @("proxy.py", "requirements.txt", "config.example.json", "proxy.ini.example", "start-proxy.bat", "LICENSE-proxy.txt")
-foreach ($f in $externalFiles) {
-    if (-not (Test-Path (Join-Path $stagingSrc $f))) {
-        throw "release-staging\$f is missing. This script doesn't generate it -- copy the current version in from the private skyrimnet-multiproxy-dev repo (or a prior release zip, if nothing proxy-side changed) before running this."
+if (-not (Test-Path $stagingSrc -PathType Container)) {
+    throw "release-staging\ is missing. Run .\sync-release-staging.ps1 first (or stage a prior release's runtime files by hand) before running this."
+}
+
+# --- The runtime manifest: every .py the zip may contain (proxy.py + proxy_internal tree),
+# per proxy-runtime.manifest, plus the four non-code files. Anything else is refused. ---
+$manifestPath = Join-Path $root "proxy-runtime.manifest"
+if (-not (Test-Path $manifestPath -PathType Leaf)) {
+    throw "proxy-runtime.manifest is missing -- cannot verify the staged runtime tree."
+}
+$manifestPy = Get-Content $manifestPath | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" -and -not $_.StartsWith("#") }
+$requiredStatic = @("requirements.txt", "config.example.json", "start-proxy.bat", "LICENSE-proxy.txt")
+
+foreach ($rel in ($manifestPy + $requiredStatic)) {
+    if (-not (Test-Path (Join-Path $stagingSrc $rel) -PathType Leaf)) {
+        throw "release-staging\$rel is missing. Run .\sync-release-staging.ps1 to re-stage it."
     }
+}
+$extraPy = Get-ChildItem $stagingSrc -Recurse -Filter "*.py" -File -ErrorAction SilentlyContinue |
+    ForEach-Object { $_.FullName.Substring($stagingSrc.Length + 1) -replace '\\', '/' } |
+    Where-Object { $manifestPy -notcontains $_ }
+if ($extraPy) {
+    foreach ($e in $extraPy) { Write-Host "  UNEXPECTED STAGED .py: $e" -ForegroundColor Red }
+    throw "Aborting: release-staging\ contains .py files outside proxy-runtime.manifest."
 }
 
 # --- Guard: this script is the safety net, not the only one (sync-release-staging.ps1 checks the
 # same thing on the way in). Never publish list mirrors RELEASING.md's own "What must never cross"
 # table -- keep this list in step by hand if that table changes; RELEASING.md is the authority.
-$neverPublishNames = @("config.json", "proxy.ini", "pytest.ini", "requirements-dev.txt", "CLAUDE.md", "TECHNICAL.md", "README.md")
-$neverPublishDirs = @("prompts", "tests", "design", "docs")
+$neverPublishNames = @("config.json", "proxy.ini", "pytest.ini", "requirements-dev.txt", "CLAUDE.md", "TECHNICAL.md", "README.md", ".env")
+$neverPublishDirs = @("prompts", "tests", "design", "docs", "__pycache__", ".git")
 
 function Test-NeverPublishTree {
     param([string]$Dir, [string]$Label)
@@ -112,6 +133,7 @@ function Test-SuspiciousValue {
 
 $suspiciousKeys = @()
 foreach ($prop in $exampleConfig.PSObject.Properties) {
+    if ($prop.Name -eq "_comment") { continue }
     $suspiciousKeys += Test-SuspiciousValue -Value $prop.Value -Path $prop.Name
 }
 if ($suspiciousKeys.Count -gt 0) {
@@ -124,7 +146,7 @@ if ($suspiciousKeys.Count -gt 0) {
 
 Write-Host "Building $releaseName (plugin v$version)..."
 
-if (Test-Path $work) { Remove-Item $work -Recurse -Force }
+# Fresh GUID-suffixed dir -- created, never deleted first: nothing else can own this path.
 New-Item -ItemType Directory -Path $contentDir -Force | Out-Null
 
 # 1. The SKSE plugin itself -- SkyrimNetMultiProxy.dll + SkyrimNetMultiProxy.ini -- goes into its
@@ -141,13 +163,19 @@ Compress-Archive -Path (Join-Path $pluginStageDir "SKSE") -DestinationPath (Join
 
 # 2. Everything else the release needs, sitting loose alongside SkyrimNetMultiProxy.zip, all inside
 #    the "SkyrimNet MultiProxy\" wrapper folder so extracting the outer zip leaves one tidy folder.
+#    The Python runtime arrives as the full proxy_internal\ tree (from the staged allowlist), not
+#    a single proxy.py -- the runtime is a package now, and shipping proxy.py alone would crash
+#    on its first `from proxy_internal...` import.
 Write-Host "Copying the rest of the release..."
 Copy-Item (Join-Path $root "LICENSE") $contentDir -Force
 Copy-Item (Join-Path $root "setup.bat") $contentDir -Force
 Copy-Item (Join-Path $root "setup.ps1") $contentDir -Force
 Copy-Item (Join-Path $root "START HERE.txt") $contentDir -Force
-foreach ($f in $externalFiles) {
-    Copy-Item (Join-Path $stagingSrc $f) $contentDir -Force
+foreach ($rel in ($manifestPy + $requiredStatic)) {
+    $dest = Join-Path $contentDir $rel
+    $destParent = Split-Path $dest -Parent
+    New-Item -ItemType Directory -Path $destParent -Force | Out-Null
+    Copy-Item (Join-Path $stagingSrc $rel) $dest -Force
 }
 
 # 2b. Defense-in-depth: re-check the fully assembled tree right before it gets zipped, not just
@@ -170,8 +198,9 @@ Write-Host "Staged (uncompressed) copy left at: $stageDir -- safe to delete."
 
 # 4. Check the zip before it goes anywhere (RELEASING.md step 5) -- list its contents and assert
 #    the positives that doc names: one top-level "SkyrimNet MultiProxy\" folder, LICENSE-proxy.txt
-#    present, no config.json/proxy.ini/.log/tests/prompts. A published zip can't be unpublished
-#    from anyone who already has it, so this runs every time, not just when something looks wrong.
+#    present, proxy.py + proxy_internal\ present per the manifest, no config.json/proxy.ini/.log/
+#    tests/prompts. A published zip can't be unpublished from anyone who already has it, so this
+#    runs every time, not just when something looks wrong.
 Write-Host ""
 Write-Host "Verifying zip contents..."
 Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -197,6 +226,13 @@ if (-not ($entries -contains "$wrapperName/LICENSE-proxy.txt")) {
     throw "Zip assertion failed: $wrapperName\LICENSE-proxy.txt is missing."
 }
 
+foreach ($rel in ($manifestPy + $requiredStatic)) {
+    $zipPath = "$wrapperName/" + ($rel -replace '\\', '/')
+    if (-not ($entries -contains $zipPath)) {
+        throw "Zip assertion failed: $zipPath is missing (runtime manifest mismatch)."
+    }
+}
+
 $forbiddenInZip = $entries | Where-Object {
     $leaf = ($_ -split '/')[-1]
     $neverPublishNames -contains $leaf -or
@@ -209,4 +245,4 @@ if ($forbiddenInZip) {
     throw "Aborting: $outZip contains file(s) that must never be published."
 }
 
-Write-Host "All zip content assertions passed: one top-level '$wrapperName\' folder, LICENSE-proxy.txt present, no config.json/proxy.ini/.log/tests/prompts." -ForegroundColor Green
+Write-Host "All zip content assertions passed: one top-level '$wrapperName\' folder, full runtime tree per manifest, LICENSE-proxy.txt present, no config.json/proxy.ini/.log/tests/prompts." -ForegroundColor Green
