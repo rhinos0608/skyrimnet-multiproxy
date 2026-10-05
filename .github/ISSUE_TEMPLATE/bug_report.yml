@@ -18,7 +18,6 @@ body:
         - Claude (subscription, through the Claude CLI)
         - ChatGPT (subscription, through the Codex CLI)
         - Google Antigravity (subscription)
-        - Gemini (API key)
         - OpenRouter
         - GLM (z.ai)
         - Nano-GPT
@@ -35,7 +34,7 @@ body:
     attributes:
       label: Which model?
       description: The full model name you gave SkyrimNet, prefix and all.
-      placeholder: e.g. geminicli/gemini-3.8-flash-high
+      placeholder: e.g. vertex:gemini-2.5-flash
     validations:
       required: false
 

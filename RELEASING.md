@@ -1,32 +1,43 @@
 # Releasing SkyrimNet MultiProxy
 
-Two repos build one release, and they must not bleed into each other. This doc is the authority on
+Two parts build one release, and they must not bleed into each other. This doc is the authority on
 which one owns what, exactly which files cross the line, and which files must never cross it.
 
-- **`skyrimnet-multiproxy-dev`** (private) — the proxy itself: `proxy.py`, its tests, its own
-  `TECHNICAL.md`, and the working notes. Never published as a repo.
-- **`skyrimnet-multiproxy`** (public) — what the world sees: the SKSE plugin (`src/`, the built
-  `.dll`), the release zip, the public `README.md` / `TECHNICAL.md` / `RELEASE_NOTES.md`, and the
-  GitHub releases.
+- **This repo's own Python tree** — the proxy itself: `proxy.py`, `proxy_internal/`, their own
+  `requirements.txt`, templates, and the working notes. This checkout is the Python source of
+  truth; there is no separate private `-dev` repo anymore. Do not reintroduce one.
+- **This repo's SKSE plugin** — what the world sees alongside the proxy: the plugin (`src/`, the
+  built `.dll`), the release zip, the public `README.md` / `TECHNICAL.md` / `RELEASE_NOTES.md`,
+  and the GitHub releases.
 
-The public repo does **not** contain `proxy.py` in its own tree. It arrives at release time through
-`release-staging\` (gitignored), which is why a hand-copy step has always existed here — and why that
-step is the one place a private file can leak into a published zip.
+The release zip is assembled from this same tree through `release-staging\` (gitignored), which
+is why a hand-copy step has always existed here — and why that step is the one place a private
+file can leak into a published zip.
+
+> **Status: UNRELEASED.** The `proxy.py` + `proxy_internal/` tree in this checkout has not shipped
+> in any release yet. Nothing in this doc claims otherwise — do not describe the packaged
+> runtime, the manifest, or any new provider support as shipped until a release actually goes out.
 
 ---
 
-## What crosses from dev to public
+## What goes into the zip
 
-Exactly six files, into `release-staging\`. Nothing else, ever.
+The Python runtime plus four non-code files, into `release-staging\`. Nothing else, ever.
+Every `.py` is named in `proxy-runtime.manifest` (the explicit allowlist — `proxy.py` plus the
+full `proxy_internal/` tree, 61 files). The four non-code files are named explicitly in
+`sync-release-staging.ps1`. No folder copies, no wildcards, ever.
 
 | Staged file | Comes from | Notes |
 | :--- | :--- | :--- |
-| `proxy.py` | dev repo root | The only file that changes in most releases |
-| `requirements.txt` | dev repo root | Runtime deps only — **not** `requirements-dev.txt` |
-| `config.example.json` | dev repo root | The template, with placeholder keys |
-| `proxy.ini.example` | dev repo root | The template |
-| `start-proxy.bat` | dev repo root | |
-| `LICENSE-proxy.txt` | dev repo's `LICENSE` | Renamed on copy. MIT requires galanx's and rhinos0608's notices to travel with the bundled code |
+| `proxy.py` + `proxy_internal/` tree | this repo, per `proxy-runtime.manifest` | The only files that change in most releases. `proxy.py` alone is NOT enough — the runtime is a package now and crashes on its first `from proxy_internal...` import without the tree |
+| `requirements.txt` | this repo root | Runtime deps only — dev-only packages (`pytest`, `pytest-asyncio`, `httpx`, `google-genai`) are stripped and never ship |
+| `config.example.json` | this repo root | The template, with placeholder keys |
+| `start-proxy.bat` | this repo root | Cd's to its own folder (`%~dp0`) — no hardcoded paths |
+| `LICENSE-proxy.txt` | this repo's proxy license | Renamed copy. MIT requires galanx's and rhinos0608's notices to travel with the bundled code |
+
+There is intentionally **no** `proxy.ini.example`: the current runtime reads no `proxy.ini`
+(verified — zero references in `proxy.py` / `proxy_internal/`). Do not invent one until the
+runtime actually supports it.
 
 ## What must never cross
 
@@ -34,24 +45,24 @@ Each of these has a real reason, not a tidiness reason:
 
 | Never publish | Why |
 | :--- | :--- |
-| **`config.json`** | Live API keys in plaintext — OpenRouter, GLM, Nano-GPT, Gemini. It sits one character away from `config.example.json` in the same folder, so a careless glob or a tab-completion slip publishes real credentials. This is the single highest-risk file in either repo. |
-| `proxy.ini` | Personal SkyrimWatcher paths. `proxy.ini.example` is the template that ships. |
-| `proxy.log` | Request history from real play sessions. |
+| **`config.json`** | Live API keys in plaintext. It sits one character away from `config.example.json` in the same folder, so a careless glob or a tab-completion slip publishes real credentials. This is the single highest-risk file in the tree. |
+| `proxy.ini`, `proxy.log` | A live `proxy.ini` (personal paths) never ships; `proxy.log` holds request history from real play sessions. No `proxy.ini.example` ships either — the runtime reads no `proxy.ini`. |
 | `prompts/` | Queue, handoffs, board state — the working record, not a product. |
-| `tests/`, `pytest.ini`, `requirements-dev.txt` | Development-only. A user running the release never needs them. |
-| `design/`, `docs/`, dev's `CLAUDE.md` | Internal design material. |
-| dev's `TECHNICAL.md` and `README.md` | The public repo has its **own** versions of both, written in a different voice for a different reader. Copying dev's over them is a real, easy mistake — they have identical filenames. |
+| `.env`, auth stores, `tests/`, `pytest.ini` | Development-only and secrets-adjacent. A user running the release never needs them. |
+| `design/`, `docs/`, `CLAUDE.md` | Internal material, never published. |
+This repo's `TECHNICAL.md` and `README.md` are the public, player-facing versions — never overwritten
+from anywhere else. They have no private counterparts anymore.
 
-**The rule that catches all of it:** stage by an explicit six-name manifest, never by copying a folder
-or a wildcard. `build-release.ps1` refuses to build if a forbidden file is sitting in
-`release-staging\`.
+**The rule that catches all of it:** stage by the explicit manifest (`proxy-runtime.manifest` +
+four named non-code files), never by copying a folder or a wildcard. `build-release.ps1` refuses
+to build if a forbidden file is sitting in `release-staging\`.
 
 ---
 
 ## Releasing
 
-1. **Confirm what actually changed.** In the dev repo, read the commits since the last release tag.
-   If only `proxy.py` changed, this is a proxy-only release — the SKSE plugin's own **code** doesn't
+1. **Confirm what actually changed.** Read the commits since the last release tag.
+   If only the runtime tree changed, this is a proxy-only release — the SKSE plugin's own **code** doesn't
    need touching, but see the next step: its **version** still needs bumping and rebuilding, every
    time, with no exception.
 2. **The plugin's version ALWAYS moves to match the release, every release — no exceptions, even
@@ -78,13 +89,15 @@ or a wildcard. `build-release.ps1` refuses to build if a forbidden file is sitti
      against a stale cache won't pick it up). Confirm the rebuilt `.dll` actually reports the new
      version (via `SkyrimNetMultiProxy.log` or the `tools/launch-proxy-test` harness) before moving
      on — don't trust the version number in a file alone.
-3. **Stage the six files** — `sync-release-staging.ps1`, which copies exactly the manifest above and
+3. **Stage the runtime** — `.\sync-release-staging.ps1`, which stages exactly the manifest above and
    refuses anything else.
 4. **Build the zip** — `.\build-release.ps1`. It reads the version from `skse-project.json` and writes
    `github-releases\SkyrimNetMultiProxy-vX.Y.Z.zip`.
-5. **Check the zip before it goes anywhere.** List its contents and confirm: no `config.json`, no
-   `proxy.ini`, no `.log`, no `tests`, no `prompts`, one top-level `SkyrimNet MultiProxy\` folder, and
-   `LICENSE-proxy.txt` present. A published zip can't be unpublished from anyone who already has it.
+5. **Check the zip before it goes anywhere.** List its contents and confirm: the full runtime tree
+   per `proxy-runtime.manifest` (`proxy.py` + `proxy_internal/`), the four non-code files, no
+   `config.json`, no `proxy.ini`, no `.log`, no `tests`, no `prompts`, one top-level
+   `SkyrimNet MultiProxy\` folder, and `LICENSE-proxy.txt` present. A published zip can't be
+   unpublished from anyone who already has it.
 6. **Write the notes.** `RELEASE_NOTES.md` gets the new version's section on top, and the GitHub
    release body is the same text. Design side drafts, Gemini gets a real pass at it, the director
    approves the final wording. The header sells **one** flagship feature, not a flat list.
@@ -119,7 +132,7 @@ or a wildcard. `build-release.ps1` refuses to build if a forbidden file is sitti
       `## ✨ Key Features` need a new bullet for this release's headline feature(s)? Does any
       existing bullet or tip now read stale (an old warning, an old workaround, an old provider
       count) given what just shipped? Write it in the README's **own voice** — don't just paste
-      dev's bullets or `RELEASE_NOTES.md` prose across; this is a living "what can it do right now"
+      this repo's bullets or `RELEASE_NOTES.md` prose across; this is a living "what can it do right now"
       doc, not a changelog entry.
    2. **Write/update the Discord post** — see its own dedicated guidance below.
    3. **Clear the release's TODO lines.**
@@ -158,13 +171,22 @@ or a wildcard. `build-release.ps1` refuses to build if a forbidden file is sitti
 
 ---
 
-## Keeping the two repos honest
+## Keeping the public tree honest
 
-- Anything user-facing that lands in dev's README is a **flag**, not a publish: the public README only
-  describes what a released version can actually do. A feature sitting unreleased in dev doesn't
+- Anything user-facing that lands in the runtime tree is a **flag**, not a publish: the public README only
+  describes what a released version can actually do. A feature sitting unreleased in this tree doesn't
   belong there yet.
-- The public repo's own `TECHNICAL.md` describes the plugin and the release mechanics. The proxy's
-  internals are documented in the dev repo's `TECHNICAL.md` and stay there.
+- This repo's own `TECHNICAL.md` describes the plugin, the release mechanics, and the packaged
+  runtime tree. Proxy patch internals live in `apply-skyrim-watcher.py`'s own doc comments.
 - When the proxy gains a provider, the release notes and public README are the only public surfaces
   that need to change. If you find yourself copying anything else across, stop and re-read the table
   above.
+
+> **Unofficial credential use — account risk.** Some providers in the runtime authenticate by
+> reusing a third-party CLI login rather than an official API key: the Command Code CLI fallback
+> (OAuth tokens captured from the Codex CLI) and OpenCode Go fall in this bucket. That workflow
+> may violate the provider's Terms of Service — access can be throttled or revoked, and the
+> account behind the login can be affected. Where you are entitled to it, prefer the provider's
+> official API path instead (for Codex, the Command Code Provider API route on the dashboard) —
+> a real API key under your own billing, no intercepted credentials. The dashboard and README
+> carry the same warning; keep all three in step.

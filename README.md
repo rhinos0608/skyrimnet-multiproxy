@@ -18,7 +18,7 @@
 Pick whichever AI fits your setup:
 
 - **Subscriptions (no API keys):** Use your existing Claude, ChatGPT, or Google AI Pro account.
-- **API keys:** OpenRouter, GLM (z.ai), Nano-GPT, OpenAI, DeepSeek, Gemini, or Kilo Gateway.
+- **API keys:** OpenRouter, GLM (z.ai), Nano-GPT, OpenAI, DeepSeek, or Kilo Gateway.
 - **Ollama:** Run free models locally on your PC, or connect to Ollama Cloud with an API key.
 
 Everything is included in one package: an SKSE plugin that manages the proxy lifecycle alongside the game, and a complete, ready-to-run copy of the proxy.
@@ -41,10 +41,9 @@ Everything is included in one package: an SKSE plugin that manages the proxy lif
 * **Tougher under pressure:** Dropped connections retry on their own, chats that run too long get trimmed in the middle and retried instead of going silent, and garbled markup tags get cleaned up before SkyrimNet ever sees them. You can also set waiting lines under `[Concurrency]` in `proxy.ini` so busy providers don't trip their rate limits. The dashboard shows how busy each capped provider is, so you can see who's swamped at a glance.
 * **Complete package:** Includes both the SKSE plugin and the full proxy script in a single download.
 * **Starts automatically:** When Skyrim boots, the plugin checks if the proxy is already active. If not, it launches it silently in the background.
-* **Eleven AI providers:** Claude, ChatGPT, and Google Antigravity (via CLI logins), OpenRouter, GLM (z.ai), Nano-GPT, OpenAI, DeepSeek, Gemini, Kilo Gateway, and Ollama. Mix and match — SkyrimNet lets you give different jobs different models, and each request is routed automatically based on its model name.
+* **Ten AI providers:** Claude, ChatGPT, and Google Antigravity (via CLI logins), OpenRouter, GLM (z.ai), Nano-GPT, OpenAI, DeepSeek, Kilo Gateway, and Ollama. Mix and match — SkyrimNet lets you give different jobs different models, and each request is routed automatically based on its model name.
 * **Codex, your way:** Stick with your ChatGPT subscription, or point Codex at OpenAI's official API, a local Ollama or LM Studio install, or any other OpenAI-compatible endpoint — right from the dashboard's Codex card. Know a model ID that works but isn't in the list? Pin it and it'll show up for good.
-* **Your Google subscription counts:** Already paying for Google AI Pro or Ultra? Install [Google's Antigravity CLI](https://antigravity.google), sign in once, and use `geminicli/MODEL` — no API key required. That login isn't limited to Gemini either: the dashboard lists whichever models your account can actually run, Claude and GPT-OSS models included, with a **Refresh** button for when Google changes the lineup.
-* **Gemini API key support:** Prefer going straight to Google's API? Add a Google AI Studio key and use `gemini/MODEL` — nothing to install, and the dashboard lists every model your key can run.
+* **Your Google subscription counts:** Already paying for Google AI Pro or Ultra? Install [Google's Antigravity CLI](https://antigravity.google), sign in once, and use `antigravity-MODEL` — no API key required. That login isn't limited to Gemini either: the dashboard lists whichever models your account can actually run, Claude and GPT-OSS models included, with a **Refresh** button for when Google changes the lineup.
 * **No Claude required:** Use whichever provider you prefer. Claude configuration is only needed if you choose a Claude model.
 * **Local web dashboard:** Visit `http://127.0.0.1:8000` to save keys, check provider status, and copy model strings. Selecting a provider displays its key, model list, and readiness status.
 * **Automatic Ollama model list:** The dashboard detects and lists your locally installed Ollama models, complete with a **Refresh** button for newly pulled models. Enter an Ollama Cloud key to view hosted models instead.
@@ -68,7 +67,7 @@ Everything is included in one package: an SKSE plugin that manages the proxy lif
    - **Claude:** Install the [Claude CLI](https://docs.anthropic.com/en/docs/claude-code) and complete the login.
    - **ChatGPT:** Install the [Codex CLI](https://www.npmjs.com/package/@openai/codex) and run `codex login` once in a terminal (note: responses are generally slower per reply).
    - **Google Antigravity:** Install the [Antigravity CLI](https://antigravity.google) — on Windows, run `irm https://antigravity.google/cli/install.ps1 | iex` in PowerShell — then run `agy` once and sign in with the Google account your AI Pro or Ultra subscription is on (note: responses are generally slower per reply, same as ChatGPT above).
-   - **API Key providers:** Paste your key into the dashboard. For Gemini, that's a key from [Google AI Studio](https://aistudio.google.com/apikey).
+   - **API Key providers:** Paste your key into the dashboard.
    - **Ollama:** Ensure the Ollama service is running on your machine.
 7. **Configure SkyrimNet:** In SkyrimNet's in-game or configuration settings:
    - Endpoint: `http://localhost:8000/v1/chat/completions`
@@ -78,8 +77,12 @@ Everything is included in one package: an SKSE plugin that manages the proxy lif
 > [!TIP]
 > `PythonExe` already defaults to `py`, which correctly finds a real Python install from [python.org](https://www.python.org/downloads/). If you installed Python through the Microsoft Store's own app instead, use `python` there — that's real Python too, it just doesn't include `py`. Either way, avoid setting this to bare `python` on a system that's never had Python installed at all — Windows registers its own placeholder `python` command that silently opens the Microsoft Store instead of running anything.
 
-> [!TIP]
-> To turn on automatic shutdown, debug logs, full AI replies in the console, or per-provider request limits, copy **`proxy.ini.example`** to **`proxy.ini`** in your `SkyrimNet MultiProxy` folder and adjust the settings. If you skip this, default behavior applies.
+> [!NOTE]
+> The current release's proxy runtime is configured through `config.json` (via the dashboard or
+> `config.example.json`) — there is no `proxy.ini.example` in this release, because the runtime
+> does not read `proxy.ini`. The shipped runtime is proxy-only (no MCP server mode): it serves the
+> OpenAI-compatible chat API and the local dashboard on `127.0.0.1` (loopback only, default port
+> `8000` — override with `python proxy.py --port NNNN` for a manual launch).
 
 ---
 
@@ -99,7 +102,18 @@ If you are upgrading from **Claude SkyrimNet Proxy Launcher** (plugin previously
 > `ProxyScript` and `WorkDir` in `SkyrimNetMultiProxy.ini` must be configured with valid paths before launching Skyrim, or the SKSE plugin will be unable to start the proxy.
 
 > [!CAUTION]
-> **Using Claude through a subscription operates in a gray area of Anthropic's Terms of Service.** The proxy uses the Claude CLI's active session to make direct API requests rather than routing through the standard Claude Code interface. This workflow may not be explicitly authorized under Anthropic's [Terms of Service](https://www.anthropic.com/legal/consumer-terms) or [Acceptable Use Policy](https://www.anthropic.com/legal/aup). Please review both documents before using Claude models. Access could be throttled or revoked at any time, and your Anthropic account could potentially be affected. This software is provided as-is with no guarantee of continued compatibility; you assume all responsibility by using it. The other providers don't use this method.
+> **KNOWN DECISION FOR THE MAINTAINER — not a user fix.** `proxy.py` still contains hardcoded
+> third-party Google OAuth client id/secret constants for the Antigravity provider
+> (sourced from the opencode-antigravity-auth plugin), used as the token-refresh
+> fallback — env-overridable, but with the literal as the default. Publishing those literals in a
+> public repo is a credential-hygiene concern — it identifies a third-party OAuth client, not this
+> project — but removing the fallback breaks the provider out of the box for users without their
+> own client credentials. Deliberate tradeoff, flagged here so it stays visible; do not "fix" it
+> quietly in a drive-by commit.
+>
+> **Some subscription logins operate in a gray area of provider Terms of Service.** Claude, ChatGPT (Codex CLI login reuse), Command Code (CLI fallback), OpenCode Go, and Google Antigravity each authenticate here by borrowing a third-party CLI login session to make direct API requests rather than routing through the provider's standard interface. This workflow may not be explicitly authorized under the provider's Terms of Service or Acceptable Use Policy (for Claude: Anthropic's [Terms of Service](https://www.anthropic.com/legal/consumer-terms) and [Acceptable Use Policy](https://www.anthropic.com/legal/aup); review the equivalent documents for OpenAI, Google, and OpenCode before enabling these models). Access could be throttled or revoked at any time, and the account behind the login could potentially be affected. **Prefer a direct official API key wherever you are entitled to one** — Command Code and Codex both accept a real key under your own billing on the dashboard (for Codex, the Command Code Provider API route or any OpenAI-compatible endpoint), which is the provider-sanctioned path; the CLI-login fallbacks exist for users without key access. Note that OpenCode Go is scoped as a coding agent, not a general chat endpoint — expect uneven results on SkyrimNet's dialogue jobs. The plain API-key providers don't use any of this method. This software is provided as-is with no guarantee of continued compatibility; you assume all responsibility by using it.
+>
+> **⚠️ Antigravity is not a gray area — Google states it is a breach.** The [Google Antigravity Additional Terms of Service](https://antigravity.google/terms) say, verbatim: *"Using third party software, tools, or services to access the Service (e.g. using OpenClaw with Antigravity OAuth) is a breach of this Agreement. Such actions may be grounds for suspension or termination of your Antigravity **and/or Gemini CLI accounts**."* Enabling `antigravity-*` models here means exactly that pattern: a third-party tool (this proxy) making direct API calls with a borrowed Antigravity OAuth login. The consequence named is loss of your Antigravity account, which shares quota with Gemini CLI. Treat the `antigravity-*` provider as opt-in at your own risk, not as a supported path — and note this is the one provider where a documented, provider-sanctioned alternative (Vertex AI via `vertex:`) already exists in this build.
 
 ---
 
@@ -116,7 +130,7 @@ If you are upgrading from **Claude SkyrimNet Proxy Launcher** (plugin previously
 ---
 
 * **Q: Which AI provider should I choose?**
-  > **Use what you already have.** If you already subscribe to Claude, ChatGPT, or Google AI Pro, that login works here through its own CLI. Ollama is free and runs locally if your hardware can handle the model. Everything else (OpenRouter, GLM, Nano-GPT, OpenAI, DeepSeek, Gemini, Kilo Gateway) takes an API key from that service, on whatever terms you have with them.
+  > **Use what you already have.** If you already subscribe to Claude, ChatGPT, or Google AI Pro, that login works here through its own CLI. Ollama is free and runs locally if your hardware can handle the model. Everything else (OpenRouter, GLM, Nano-GPT, OpenAI, DeepSeek, Kilo Gateway) takes an API key from that service, on whatever terms you have with them.
 
 ---
 

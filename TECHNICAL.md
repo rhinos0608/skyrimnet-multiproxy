@@ -62,9 +62,13 @@ On `SKSEPlugin_Load` (before the main menu), the plugin:
 2. Checks whether the configured port is already listening — a manually pre-launched proxy (or a
    still-present old `ProxyLauncher.dll` racing to launch its own copy) is detected and left alone
    rather than duplicated.
-3. If nothing's listening, launches `python proxy.py` as a detached, minimized console process via
+3. If nothing's listening, launches the proxy as a detached, minimized console process via
    a pure Win32 process launcher (`proxy_launcher.cpp` has no CommonLibSSE dependency — it's a
-   thin wrapper Skyrim's own event system happens to trigger).
+   thin wrapper Skyrim's own event system happens to trigger). The launcher passes
+   `--plugin-version` (this DLL's own version, for the dashboard's match check) on the command
+   line and reads the listen port from the plugin's own `Port` setting (default `8000`); the proxy
+   itself takes `--port` (default `8000`) for manual launches and binds `127.0.0.1` by default —
+   loopback only, never the LAN.
 4. Logs the result to `Documents\My Games\Skyrim Special Edition\SKSE\SkyrimNetMultiProxy.log`.
 5. If `Data\SKSE\Plugins\ProxyLauncher.dll` (the pre-rename DLL) is still present, logs a one-time
    warning that it's dead weight and safe to delete, alongside `ProxyLauncher.ini`.
@@ -72,15 +76,46 @@ On `SKSEPlugin_Load` (before the main menu), the plugin:
 The proxy warms up in the background while the game loads; the first NPC conversation waits up to
 60s for auth to be ready (handled inside the proxy itself, not this plugin).
 
+## The shipped runtime is proxy-only
+
+The packaged runtime serves the OpenAI-compatible chat API and the local dashboard — nothing else.
+There is no MCP server mode in the shipped tree (`mcp_server.py` / `orchestrator.py` are not
+packaged, `--mode mcp` / `--transport` do not exist here, and `requirements.txt` carries no `mcp`
+dependency). Manual launch is `python proxy.py --port 8000` from the release folder
+(`start-proxy.bat` does exactly this); `--plugin-version` is normally supplied by the SKSE launcher
+so the dashboard can compare proxy vs. plugin versions.
+
+### Provider concurrency limits
+
+`proxy_internal/concurrency.py` hands each provider a pool of simultaneous-request slots before the
+routing chain calls it. This is what keeps a plan-wide cap — z.ai's coding plans allow 6 concurrent
+calls — from turning into upstream 429s; a request that cannot get a slot in time fails with HTTP
+503 so SkyrimNet's smart routing can move to the next provider.
+
+Limits live in `config.json` as `providers.<name>.max_concurrent` (`0` = unlimited) and
+`providers.<name>.queue_timeout_ms` (`0` = wait forever, default 60000). zai defaults to 6 with no
+config entry; every other provider is unlimited until one is added. Live usage (`limit`, `active`,
+`queued`) is reported per provider on `/health` under `concurrency`.
+
+### Context-window trimming
+
+`proxy_internal/context_trim.py` handles the upstream 400 that means "prompt too long". When a
+provider reports `context_length_exceeded` with token counts, the Z.AI provider drops the oldest
+droppable history — never the first message (SkyrimNet's diary/scenario context), never the final
+message (the turn being answered), never a `system` message — and retries, up to `MAX_TRIM_ROUNDS`
+rounds, before surfacing the error. Streaming retries are safe because the rejection arrives while
+opening the stream, before any event reaches the client.
+
 ## Release packaging
 
-Starting with this release, the distributed zip bundles a complete, ready-to-run `proxy.py`
-directly — no separate download, no patch step for the end user. That file is sourced from the
-**private** `skyrimnet-multiproxy-dev` repo (a dev-only fork used to track/test changes against
-upstream), copied in at release-build time rather than kept as a second tracked copy here — two
-independently-editable copies of the same file drifting apart is exactly the bug that motivated
-this change (see "What's changed from upstream" in `skyrimnet-multiproxy-dev`'s own TECHNICAL.md
-for the history).
+Starting with this release, the distributed zip bundles a complete, ready-to-run Python runtime
+directly — no separate download, no patch step for the end user. That tree (`proxy.py` plus the
+full `proxy_internal/` package) is tracked in this repo; it is the Python source of truth, and
+`proxy-runtime.manifest` names every `.py` file the zip may contain (no wildcards — a new module
+does not ship until someone adds it to the manifest).
+
+> **Status: UNRELEASED.** The packaged runtime tree in this checkout has not shipped in any
+> release yet. Do not describe it as shipped.
 
 A release package contains:
 
@@ -88,53 +123,59 @@ A release package contains:
 SkyrimNetMultiProxy-vX.Y.Z.zip
 ├── SkyrimNetMultiProxy.dll   — the SKSE plugin
 ├── SkyrimNetMultiProxy.ini   — SKSE plugin config template
-├── proxy.py                  — complete, ready-to-run proxy (from skyrimnet-multiproxy-dev)
-├── proxy.ini.example         — proxy's own optional config template
-├── config.example.json       — OpenRouter/GLM/Nano-GPT key template
-├── requirements.txt          — proxy's Python dependencies
+├── proxy.py                  — runtime entry point (tracked here)
+├── proxy_internal/            — runtime package, per proxy-runtime.manifest
+├── requirements.txt          — runtime-only Python deps (dev packages stripped)
+├── config.example.json       — API-key template (placeholders only)
 ├── start-proxy.bat           — manual-launch helper (not required — the plugin starts it)
 ├── setup.ps1 / setup.bat     — checks Python, runs pip install, prints the remaining
-│                                manual steps (tracked in this repo, not skyrimnet-multiproxy-dev —
-│                                they're launcher-package-specific, reference
+│                                manual steps (launcher-package-specific, reference
 │                                SkyrimNetMultiProxy.dll/.ini by name)
 ├── START HERE.txt             — plain-language quick-start for the zip
-└── LICENSE                   — MIT (proxy.py's original license, from upstream)
+└── LICENSE-proxy.txt         — MIT (galanx + rhinos0608 notices travel with the code)
 ```
+
+There is intentionally **no** `proxy.ini.example`: the current runtime reads no `proxy.ini`
+(verified — zero references in `proxy.py` / `proxy_internal/`). The old `proxy.ini`-based
+`AutoCloseWithSkyrim` / `EnableLogging` / `SkyrimProcess` settings below are historical — they
+describe the previous single-file proxy generation and do not apply to the packaged runtime
+until it actually supports them.
 
 ## Staging and building a release — the dev/public boundary
 
 `RELEASING.md` is the authority on the full release process and the exact manifest; this section
 covers the two scripts that enforce it.
 
-`release-staging\` (gitignored) is the one place a file from the private `skyrimnet-multiproxy-dev`
-repo can leak into a published zip — `config.json` (live API keys) sits one character away from
-`config.example.json` (which does ship) in that repo's root, so a folder copy or a glob is a real
-credential-leak risk, not a hypothetical one. Both scripts below treat that as the thing to guard
-against, not just to document.
+`release-staging\` (gitignored) is the one place a sensitive file can leak into a published
+zip — `config.json` (live API keys) sits one character away from `config.example.json` (which does
+ship) in this repo's own root, so a folder copy or a glob is a real credential-leak risk, not a
+hypothetical one. Both scripts below treat that as the thing to guard against, not just to document.
 
-**`sync-release-staging.ps1`** replaces the hand-copy step. It resolves `skyrimnet-multiproxy-dev`
-as a sibling of this repo (`..\skyrimnet-multiproxy-dev`, via `$PSScriptRoot` — no hardcoded
-absolute path), then copies exactly the six files RELEASING.md's manifest names, by explicit
-source→destination pairs (`LICENSE` → `LICENSE-proxy.txt` renamed on the way in). Never a folder
-copy, never a wildcard — a new file added to the dev repo's root does not get staged until someone
-deliberately adds it to the manifest in both this script and RELEASING.md. Before copying anything,
-it checks `release-staging\` itself against RELEASING.md's "What must never cross" list and refuses
-(naming the offender) if anything on it is already sitting there — it does not delete the file
-itself, since a stray `config.json` means someone copied the wrong thing and needs to know, not have
-it silently cleaned up. Each staged file is hash-compared against what was already there so the
-output reports changed vs. unchanged per file.
+**`sync-release-staging.ps1`** stages the release files from this same tree. It reads every `.py`
+path from `proxy-runtime.manifest` plus the four named non-code files (`requirements.txt`,
+`config.example.json`, `start-proxy.bat`, `LICENSE-proxy.txt` renamed on the way in for the license).
+Never a folder copy, never a wildcard — a new file added to the repo root does not get staged until
+someone deliberately adds it to the manifest. Before copying anything, it checks `release-staging\`
+itself against RELEASING.md's "What must never cross" list and refuses (naming the offender) if
+anything on it is already sitting there — it does not delete the file itself, since a stray
+`config.json` means someone copied the wrong thing and needs to know, not have it silently cleaned
+up. Each staged file is hash-compared against what was already there so the output reports changed
+vs. unchanged per file. After staging it asserts the staged `.py` set matches the manifest exactly —
+missing or unexpected files fail the run.
 
 **`build-release.ps1`** is the safety net, not the only one — it re-checks independently rather than
 trusting the sync script ran, in case `release-staging\` was populated by hand (still supported; see
 its own header comment). Before assembling the zip it: (1) re-runs the same never-publish check
-against `release-staging\`, (2) parses `config.example.json` and flags any non-empty value that
+against `release-staging\`, (1b) asserts every staged `.py` is in `proxy-runtime.manifest` and every
+manifest entry is staged, (2) parses `config.example.json` and flags any non-empty value that
 doesn't match an "obviously a placeholder" shape (empty string, `YOUR_...`, `CHANGE_ME`, `<...>`,
 etc.) — shape-based rather than matching one vendor's key format, so it still catches a real key
 staged under the example's name even for a provider added after this check was written, and (3)
 re-checks the fully assembled staging tree right before `Compress-Archive` runs, since that's the
 literal input to the zip. After the zip exists, it opens it back up and asserts the RELEASING.md
-step 5 positives — exactly one top-level `SkyrimNet MultiProxy\` folder, `LICENSE-proxy.txt`
-present, no `config.json`/`proxy.ini`/`.log`/`tests`/`prompts` anywhere inside — before printing
+step 5 positives — exactly one top-level `SkyrimNet MultiProxy\` folder, the full runtime tree per
+`proxy-runtime.manifest`, `LICENSE-proxy.txt` present, no `config.json`/`proxy.ini`/`.log`/`tests`/
+`prompts` anywhere inside — before printing
 success, so a broken assumption fails the build instead of shipping quietly.
 
 The never-publish name/dir list is duplicated between the two scripts rather than factored into a
@@ -150,7 +191,7 @@ needs to run this script.
 
 It exists so the exact same changes can be reproduced against a *different* or future copy of the
 upstream file (a fresh `git clone` of `galanx/Claude-SkyrimNet-Proxy`, or a later upstream
-version) — e.g. if upstream releases updates and `skyrimnet-multiproxy-dev` needs to be refreshed.
+version) — e.g. if upstream releases updates and the patch script needs revalidation against them.
 Validated 2026-07-26: running it against a completely fresh upstream clone reproduces the bundled
 `proxy.py` (functionally identical; only differences are comments/import-order/one now-unused
 parameter).
@@ -164,7 +205,9 @@ python apply-skyrim-watcher.py path\to\proxy.py --enable   # also turns on auto-
 - Safe to run more than once — detects if a patch is already applied.
 - Safe to run against a version where the upstream PR has already merged — bug-fix hunks are
   skipped automatically rather than double-applied or conflicting.
-- Creates `proxy.ini` alongside `proxy.py` if it doesn't exist yet.
+- Creates `proxy.ini` alongside `proxy.py` if it doesn't exist yet. (Historical — applies only to
+  the previous single-file proxy generation, not the current `proxy_internal/` runtime, which
+  reads no `proxy.ini`.)
 
 ### Bug fixes (two also submitted as [PR #5](https://github.com/galanx/Claude-SkyrimNet-Proxy/pull/5) upstream)
 
@@ -190,7 +233,12 @@ Applied unconditionally, and auto-skipped once upstream has merged/already has t
 - **Default model bump.** `DEFAULT_MODEL` updated to a more current model — a preference, not a
   bug fix, and one that will go stale again; check `_hunk_default_model` if it needs updating.
 
-### Skyrim-specific additions (`proxy.ini`)
+### Skyrim-specific additions (`proxy.ini`) — historical, previous generation only
+
+The settings below belong to the previous single-file proxy generation and the `proxy.ini` that
+`apply-skyrim-watcher.py` manages. They do **not** apply to the current packaged runtime
+(`proxy.py` + `proxy_internal/`), which reads no `proxy.ini` — kept here so the history of what
+the patch script does is still documented in one place.
 
 ```ini
 [General]
