@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+#
+# skyrimnetproxy -- start the SkyrimNet MultiProxy server on port 8982, reachable
+# from your Tailscale network, listening on all interfaces (not just loopback).
+#
+# Usage:
+#   skyrimnetproxy
+#
+# Overrides (all optional):
+#   SKYRIMNETPROXY_PORT       default 8982
+#   SKYRIMNETPROXY_HOST       default 0.0.0.0   (all interfaces; see the warning below)
+#   SKYRIMNETPROXY_TAILSCALE  default 1         (set 0 to skip the Tailscale HTTPS mapping)
+#   SKYRIMNETPROXY_HTTPS_PORT default 443      (tailnet HTTPS front door -> 127.0.0.1:$PORT)
+#   SKYRIMNETPROXY_PYTHON     default python3
+#   SKYRIMNETPROXY_EXTRA_ARGS extra flags appended verbatim (word-split)
+#
+# Why the Tailscale mapping is NOT done with proxy.py's own --tailscale flag:
+# that flag runs `tailscale serve --https <PORT> http://127.0.0.1:<PORT>`, which makes
+# tailscaled bind the tailnet address on <PORT> -- the same port this script binds as
+# 0.0.0.0. The wildcard bind covers the tailnet IP too, so the two collide and startup
+# dies with "address already in use". Mapping a *different* port (443) avoids it, and
+# binding 0.0.0.0 already means the tailnet can reach http://<fqdn>:<PORT> directly.
+#
+# SECURITY: binding 0.0.0.0 means every host that can route to this machine -- your
+# whole LAN, not only your tailnet -- can send chat requests that spend your
+# configured provider credentials. Dashboard config changes stay protected by the
+# dashboard CSRF cookie, but inference does not. To restrict access to Tailscale
+# only, run with SKYRIMNETPROXY_HOST=<this machine's tailnet IP> instead.
+#
+set -euo pipefail
+
+# Resolve the checkout this script lives in, following symlinks so an installed
+# ~/.local/bin/skyrimnetproxy symlink still finds proxy.py next to the real file.
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]; do
+    DIR="$(cd -P "$(dirname "$SOURCE")" >/dev/null 2>&1 && pwd)"
+    SOURCE="$(readlink "$SOURCE")"
+    case "$SOURCE" in
+        /*) ;;
+        *) SOURCE="$DIR/$SOURCE" ;;
+    esac
+done
+REPO="$(cd -P "$(dirname "$SOURCE")" >/dev/null 2>&1 && pwd)"
+
+if [ ! -f "$REPO/proxy.py" ]; then
+    echo "skyrimnetproxy: proxy.py not found next to $SOURCE (looked in $REPO)" >&2
+    exit 1
+fi
+
+PYTHON="${SKYRIMNETPROXY_PYTHON:-python3}"
+PORT="${SKYRIMNETPROXY_PORT:-8982}"
+HOST="${SKYRIMNETPROXY_HOST:-0.0.0.0}"
+TAILSCALE="${SKYRIMNETPROXY_TAILSCALE:-1}"
+HTTPS_PORT="${SKYRIMNETPROXY_HTTPS_PORT:-443}"
+
+if ! command -v "$PYTHON" >/dev/null 2>&1; then
+    echo "skyrimnetproxy: '$PYTHON' not found on PATH" >&2
+    exit 1
+fi
+
+ARGS=(--port "$PORT" --host "$HOST")
+
+# Front the proxy with a tailnet HTTPS URL on a separate port, so tailscaled's
+# listener and our own bind do not fight over the same port number.
+if [ "$TAILSCALE" = "1" ]; then
+    if command -v tailscale >/dev/null 2>&1; then
+        if tailscale serve --bg --https "$HTTPS_PORT" "http://127.0.0.1:$PORT" >/dev/null 2>&1; then
+            echo "skyrimnetproxy: tailnet HTTPS mapped on port ${HTTPS_PORT} -> 127.0.0.1:${PORT}" >&2
+        else
+            echo "skyrimnetproxy: 'tailscale serve' failed (tailnet HTTPS enabled?); continuing" >&2
+        fi
+    else
+        echo "skyrimnetproxy: tailscale CLI not found; skipping Tailscale HTTPS mapping" >&2
+    fi
+fi
+
+# shellcheck disable=SC2206
+if [ -n "${SKYRIMNETPROXY_EXTRA_ARGS:-}" ]; then
+    EXTRA=(${SKYRIMNETPROXY_EXTRA_ARGS})
+    ARGS+=("${EXTRA[@]}")
+fi
+
+echo "SkyrimNet MultiProxy"
+echo "  local:     http://localhost:${PORT}"
+echo "  bind:      ${HOST}:${PORT}"
+echo "  checkout:  ${REPO}"
+if [ "$TAILSCALE" = "1" ]; then
+    echo "  tailscale: https://<your-tailnet-fqdn>/  (port ${HTTPS_PORT}, if tailnet HTTPS is enabled)"
+    echo "             and directly on http://<your-tailnet-fqdn>:${PORT}"
+fi
+echo
+
+cd "$REPO"
+exec "$PYTHON" proxy.py "${ARGS[@]}"

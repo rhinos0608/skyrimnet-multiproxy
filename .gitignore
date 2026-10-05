@@ -5,12 +5,46 @@ out/
 *.pdb
 *.log
 
-# Release packaging (build-release.ps1) -- release-staging/ holds the files sourced from the
-# private skyrimnet-multiproxy-dev repo at release-build time (proxy.py, requirements.txt,
-# config.example.json, proxy.ini.example, start-proxy.bat), never committed here since this repo
-# isn't their source of truth. github-releases/ is the built zip output, a reproducible artifact.
+# Release packaging (build-release.ps1) -- release-staging/ is staged from THIS repo's own tree
+# by sync-release-staging.ps1 and is gitignored because it is a build input, not source.
+# github-releases/ is the built zip output, a reproducible artifact.
 release-staging/
 github-releases/
+
+# --- Python runtime (the proxy now lives in this repo) ---
+# CREDENTIAL GUARDS. This repo is public and the proxy writes live secrets into this folder at
+# runtime, so none of these may ever be committable:
+#   config.json            - API keys (values saved via the dashboard are `enc:`-encrypted; keys
+#                            written directly can still be plaintext). RELEASING.md calls this the
+#                            single highest-risk file in the project.
+#   .proxy.key             - the Fernet key proxy_internal/encryption.py generates to decrypt the
+#                            `enc:` values above. Committing it alongside an encrypted config is
+#                            equivalent to committing the plaintext keys.
+#   antigravity-auth.json  - live Antigravity OAuth tokens (proxy.py ANTIGRAVITY_AUTH_FILE).
+#   proxy.ini / *.log      - personal paths, per-user settings, real request history.
+# These lines are what keeps `git add -A` from publishing credentials.
+config.json
+.proxy.key
+antigravity-auth.json
+proxy.ini
+stats.json
+*.log
+# Atomic-write leftovers: auth/antigravity.py writes .<name>.XXXX.tmp in this
+# directory before renaming, so a crash mid-write would otherwise leave a file
+# holding token material sitting in the repo root.
+*.tmp
+
+# Python bytecode / caches
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Pi / editor tooling state (not repo content)
+.pi-smartread/
+.pi-smartread.tags.cache/
+.pi-smartread.embeddings.cache/
+.smart-edit-undo/
+pi-session-*.html
 
 # CMake
 CMakeCache.txt
